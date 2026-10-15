@@ -23,6 +23,9 @@ pub struct Config {
     pub ssd_temp_limit: u64,
     pub ssd_min_free: u64,
     pub secure_cookie: bool,
+    pub ffmpeg: String,
+    pub ytdlp: String,
+    pub aria2: String,
 }
 impl Config {
     pub fn load() -> Result<Self> {
@@ -89,6 +92,9 @@ impl Config {
             ssd_temp_limit: number("SSD_TEMP_LIMIT_GIB", 20).min(1048576) * 1024 * 1024 * 1024,
             ssd_min_free: number("SSD_MIN_FREE_GIB", 2).min(1048576) * 1024 * 1024 * 1024,
             td_cache_bytes: number("TDLIB_CACHE_MIB", 1024).max(64) * 1024 * 1024,
+            ffmpeg: get("FFMPEG_PATH", "ffmpeg"),
+            ytdlp: get("YTDLP_PATH", "yt-dlp"),
+            aria2: get("ARIA2_PATH", "aria2c"),
         })
     }
     pub fn upload_path(&self, id: &str) -> PathBuf {
