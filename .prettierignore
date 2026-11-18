@@ -1,0 +1,10 @@
+.next
+node_modules
+data
+.tdlib-build
+*.patch
+*.zip
+*.so
+*.so.*
+public/brand/*.svg
+public/favicon.svg
