@@ -1,10 +1,30 @@
 services:
+  data-init:
+    image: node:22-bookworm-slim
+    restart: "no"
+    user: "0:0"
+    network_mode: none
+    volumes:
+      - ./data:/app/data
+    command:
+      - sh
+      - -ec
+      - |
+        mkdir -p /app/data
+        chown -R 1000:1000 /app/data
+        chmod u+rwx /app/data
+
   media-cloud:
-    build: .
+    build:
+      context: .
+      target: media-cloud
     restart: unless-stopped
     env_file: .env
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
     ports:
-      - '127.0.0.1:3000:3000'
+      - "127.0.0.1:8003:3000"
     volumes:
       - ./data:/app/data
     environment:
@@ -12,13 +32,14 @@ services:
       TDLIB_PATH: /app/tdlib-native/lib/libtdjson.so.1.8.67
     healthcheck:
       test:
-        [
-          'CMD-SHELL',
-          'node -e "fetch(''http://127.0.0.1:3000/api/auth/status'').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"',
-        ]
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/auth/status').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 60s
 
   backup:
     build:
@@ -27,6 +48,8 @@ services:
     restart: unless-stopped
     env_file: .env
     depends_on:
+      data-init:
+        condition: service_completed_successfully
       media-cloud:
         condition: service_healthy
     volumes:

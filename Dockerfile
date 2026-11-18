@@ -9,7 +9,7 @@ WORKDIR /app
 COPY . .
 RUN npm run build
 
-FROM node:22-bookworm-slim
+FROM node:22-bookworm-slim AS media-cloud
 WORKDIR /app
 ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
 RUN apt-get update && apt-get install -y --no-install-recommends libssl3 libstdc++6 ca-certificates && rm -rf /var/lib/apt/lists/*
