@@ -193,7 +193,7 @@ function SignIn({ onReady }: { onReady: (member: Member) => void }) {
               required
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="itclub_admin"
+              placeholder="username"
             />
           </label>
           <label>

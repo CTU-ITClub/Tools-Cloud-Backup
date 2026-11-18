@@ -89,7 +89,39 @@ class TdClient extends EventEmitter {
       const chat = await this.call({ '@type': 'createPrivateChat', user_id: me.id, force: false });
       return chat.id;
     }
-    if (/^-?\d+$/.test(choice)) { await this.call({ '@type': 'getChat', chat_id: Number(choice) }); return Number(choice); }
+    if (/^-?\d+$/.test(choice)) {
+      const chatId = Number(choice);
+      if (!Number.isSafeInteger(chatId)) throw new Error('Storage Chat ID không hợp lệ');
+      const isKnownChat = async () => {
+        try {
+          await this.call({ '@type': 'getChat', chat_id: chatId }, 10_000);
+          return true;
+        } catch (error) {
+          if (/TDLib 400: Chat not found/i.test(String(error))) return false;
+          throw error;
+        }
+      };
+      if (await isKnownChat()) return chatId;
+
+      // TDLib's getChat only sees chats already loaded into this session.
+      for (const chatList of [null, { '@type': 'chatListArchive' }]) {
+        for (let attempt = 0; attempt < 10; attempt++) {
+          try {
+            await this.call({ '@type': 'loadChats', chat_list: chatList, limit: 100 }, 30_000);
+          } catch (error) {
+            // TDLib returns 404 when this chat list has been fully loaded.
+            if (/TDLib 404:/.test(String(error))) break;
+            throw error;
+          }
+          if (await isKnownChat()) return chatId;
+        }
+      }
+      throw new Error(
+        `Không tìm thấy nhóm Telegram ${choice}. Hãy kiểm tra đúng Chat ID, ` +
+        'tài khoản đăng nhập TDLib đã tham gia nhóm và có quyền gửi file. ' +
+        'Nếu nhóm công khai, bạn có thể dùng @username thay cho ID.'
+      );
+    }
     const chat = await this.call({ '@type': 'searchPublicChat', username: choice.replace(/^@/, '') });
     return chat.id;
   }
