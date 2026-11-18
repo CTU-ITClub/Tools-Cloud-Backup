@@ -11,15 +11,11 @@ class TdClient extends EventEmitter {
   state: TdObject = { '@type': 'starting' };
   error: string | null = null;
   worker?: Worker;
-  private pending = new Map<
-    string,
-    { resolve: (v: TdObject) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
-  >();
+  private pending = new Map<string, { resolve: (v: TdObject) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
 
   constructor() {
     super();
-    const savedId = db().prepare("SELECT value FROM settings WHERE key='tg_api_id'").get() as
-      { value: string } | undefined;
+    const savedId = db().prepare("SELECT value FROM settings WHERE key='tg_api_id'").get() as { value: string } | undefined;
     const apiId = Number(process.env.TELEGRAM_API_ID || savedId?.value || 0);
     const apiHash = process.env.TELEGRAM_API_HASH || '';
     if (!apiId || !apiHash) {
@@ -40,7 +36,12 @@ class TdClient extends EventEmitter {
       });
       this.worker.on('message', (msg) => {
         if (msg.kind === 'state') this.state = msg.state;
-        if (msg.kind === 'error' || msg.kind === 'fatal') this.error = msg.error;
+        if (msg.kind === 'error') this.error = msg.error;
+        if (msg.kind === 'fatal') {
+          this.error = msg.error;
+          this.state = { '@type': 'stopped' };
+          this.rejectAll(new Error(msg.error));
+        }
         if (msg.kind === 'update') {
           const obj = msg.payload as TdObject;
           const id = obj['@extra'];
@@ -55,57 +56,41 @@ class TdClient extends EventEmitter {
           this.emit('update', obj);
         }
       });
-      this.worker.on('error', (err) => {
-        this.error = err.message;
-        this.rejectAll(err);
-      });
+      this.worker.on('error', (err) => { this.error = err.message; this.rejectAll(err); });
       this.worker.on('exit', (code) => {
-        this.error = `TDLib worker exited (${code})`;
+        // An initialization failure is reported via 'fatal' just before exiting.
+        // Preserve that message instead of overwriting it with 'exited (0)'.
+        this.error ||= `TDLib worker exited (${code})`;
+        this.state = { '@type': 'stopped' };
+        this.worker = undefined;
         this.rejectAll(new Error(this.error));
       });
-    } catch (err) {
-      this.error = String(err);
-    }
+    } catch (err) { this.error = String(err); }
   }
   private rejectAll(error: Error) {
-    for (const p of this.pending.values()) {
-      clearTimeout(p.timer);
-      p.reject(error);
-    }
+    for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(error); }
     this.pending.clear();
   }
-  ready() {
-    return this.state['@type'] === 'authorizationStateReady';
-  }
+  ready() { return this.state['@type'] === 'authorizationStateReady'; }
   async call(payload: TdObject, timeoutMs = 180_000): Promise<TdObject> {
     if (!this.worker || this.error) throw new Error(this.error || 'TDLib không khả dụng');
     const id = randomUUID();
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error('TDLib timeout'));
-      }, timeoutMs);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error('TDLib timeout')); }, timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       this.worker!.postMessage({ kind: 'call', id, payload });
     });
   }
   async chatId(): Promise<number> {
-    const target = db().prepare("SELECT value FROM settings WHERE key='storage_chat'").get() as
-      { value: string } | undefined;
+    const target = db().prepare("SELECT value FROM settings WHERE key='storage_chat'").get() as {value:string}|undefined;
     const choice = target?.value || process.env.STORAGE_CHAT || 'me';
     if (choice === 'me') {
       const me = await this.call({ '@type': 'getMe' });
       const chat = await this.call({ '@type': 'createPrivateChat', user_id: me.id, force: false });
       return chat.id;
     }
-    if (/^-?\d+$/.test(choice)) {
-      await this.call({ '@type': 'getChat', chat_id: Number(choice) });
-      return Number(choice);
-    }
-    const chat = await this.call({
-      '@type': 'searchPublicChat',
-      username: choice.replace(/^@/, ''),
-    });
+    if (/^-?\d+$/.test(choice)) { await this.call({ '@type': 'getChat', chat_id: Number(choice) }); return Number(choice); }
+    const chat = await this.call({ '@type': 'searchPublicChat', username: choice.replace(/^@/, '') });
     return chat.id;
   }
   async sendDocument(filePath: string, name: string, onProgress?: (bytes: number) => void) {
@@ -122,17 +107,10 @@ class TdClient extends EventEmitter {
           onProgress?.(Number(msg.file.remote?.uploaded_size || 0));
         }
         if (msg['@type'] === 'updateMessageSendSucceeded' && msg.message?.chat_id === chat) {
-          if (tempId === null) {
-            earlySuccess.value = msg;
-            return;
-          }
+          if (tempId === null) { earlySuccess.value = msg; return; }
           if (msg.old_message_id === tempId) finish(null, msg.message.id);
         }
-        if (
-          msg['@type'] === 'updateMessageSendFailed' &&
-          msg.message?.chat_id === chat &&
-          msg.old_message_id === tempId
-        ) {
+        if (msg['@type'] === 'updateMessageSendFailed' && msg.message?.chat_id === chat && msg.old_message_id === tempId) {
           finish(new Error(msg.error?.message || 'Telegram send failed'));
         }
       };
@@ -145,71 +123,38 @@ class TdClient extends EventEmitter {
         else resolve({ chatId: chat, messageId: messageId! });
       };
       this.on('update', onUpdate);
-      this.call(
-        {
-          '@type': 'sendMessage',
-          chat_id: chat,
-          input_message_content: {
-            '@type': 'inputMessageDocument',
-            document: {
-              '@type': 'inputDocument',
-              document: { '@type': 'inputFileLocal', path: filePath },
-              disable_content_type_detection: true,
-            },
-            caption: { '@type': 'formattedText', text: name, entities: [] },
-          },
+      this.call({
+        '@type': 'sendMessage',
+        chat_id: chat,
+        input_message_content: {
+          '@type': 'inputMessageDocument',
+          document: { '@type': 'inputDocument', document: { '@type': 'inputFileLocal', path: filePath }, disable_content_type_detection: true },
+          caption: { '@type': 'formattedText', text: name, entities: [] },
         },
-        15 * 60_000,
-      )
-        .then((message) => {
-          tempId = message.id;
-          fileId = message.content?.document?.document?.id || null;
-          if (!message.sending_state) finish(null, message.id);
-          else if (earlySuccess.value && earlySuccess.value.old_message_id === tempId)
-            finish(null, earlySuccess.value.message.id);
-        })
-        .catch((err) => finish(err));
+      }, 15 * 60_000).then((message) => {
+        tempId = message.id;
+        fileId = message.content?.document?.document?.id || null;
+        if (!message.sending_state) finish(null, message.id);
+        else if (earlySuccess.value && earlySuccess.value.old_message_id === tempId) finish(null, earlySuccess.value.message.id);
+      }).catch((err) => finish(err));
     });
   }
   async deleteMessage(chatId: number, messageId: number) {
-    return this.call({
-      '@type': 'deleteMessages',
-      chat_id: chatId,
-      message_ids: [messageId],
-      revoke: true,
-    });
+    return this.call({ '@type': 'deleteMessages', chat_id: chatId, message_ids: [messageId], revoke: true });
   }
   async localPath(chatId: number, messageId: number): Promise<string> {
     const msg = await this.call({ '@type': 'getMessage', chat_id: chatId, message_id: messageId });
     const content = msg.content;
-    const file =
-      content?.['@type'] === 'messageDocument'
-        ? content.document?.document
-        : content?.['@type'] === 'messagePhoto'
-          ? content.photo?.sizes?.at(-1)?.photo
-          : content?.['@type'] === 'messageVideo'
-            ? content.video?.video
-            : null;
+    const file = content?.['@type'] === 'messageDocument' ? content.document?.document
+      : content?.['@type'] === 'messagePhoto' ? content.photo?.sizes?.at(-1)?.photo
+      : content?.['@type'] === 'messageVideo' ? content.video?.video : null;
     if (!file?.id) throw new Error('Tin nhắn Telegram không còn file');
-    const result = await this.call(
-      {
-        '@type': 'downloadFile',
-        file_id: file.id,
-        priority: 32,
-        offset: 0,
-        limit: 0,
-        synchronous: true,
-      },
-      15 * 60_000,
-    );
+    const result = await this.call({ '@type': 'downloadFile', file_id: file.id, priority: 32, offset: 0, limit: 0, synchronous: true }, 15 * 60_000);
     const localPath = result.local?.path;
-    if (!localPath || !result.local?.is_downloading_completed)
-      throw new Error('Telegram chưa tải hoàn tất file');
+    if (!localPath || !result.local?.is_downloading_completed) throw new Error('Telegram chưa tải hoàn tất file');
     return localPath;
   }
 }
 
 const singleton = globalThis as typeof globalThis & { __clubTd?: TdClient };
-export function telegram(): TdClient {
-  return (singleton.__clubTd ||= new TdClient());
-}
+export function telegram(): TdClient { return singleton.__clubTd ||= new TdClient(); }
