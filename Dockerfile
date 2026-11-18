@@ -9,7 +9,7 @@ WORKDIR /app
 COPY . .
 RUN npm run build
 
-FROM node:22-bookworm-slim AS media-cloud
+FROM node:22-trixie-slim AS media-cloud
 WORKDIR /app
 ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
 RUN apt-get update && apt-get install -y --no-install-recommends libssl3 libstdc++6 ca-certificates && rm -rf /var/lib/apt/lists/*
@@ -26,7 +26,7 @@ USER node
 EXPOSE 3000
 CMD ["node", "server.js"]
 
-FROM node:22-bookworm-slim AS backup
+FROM node:22-trixie-slim AS backup
 WORKDIR /app
 ENV NODE_ENV=production
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates tar libstdc++6 && rm -rf /var/lib/apt/lists/*
