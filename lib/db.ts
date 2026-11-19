@@ -66,7 +66,7 @@ export function db(): Database.Database {
       name TEXT NOT NULL, direction TEXT NOT NULL DEFAULT 'upload',
       stage TEXT NOT NULL DEFAULT 'receiving', bytes_total INTEGER NOT NULL,
       bytes_received INTEGER NOT NULL DEFAULT 0, bytes_remote INTEGER NOT NULL DEFAULT 0,
-      error TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
+      error TEXT, dismissed_at INTEGER, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS transfer_jobs_user ON transfer_jobs(user_id,created_at DESC);
     CREATE TABLE IF NOT EXISTS media_service_tokens (
@@ -80,6 +80,10 @@ export function db(): Database.Database {
     database.exec('ALTER TABLE users ADD COLUMN can_manage_events INTEGER NOT NULL DEFAULT 0');
   }
   database.prepare("UPDATE users SET can_manage_events=1 WHERE role='admin'").run();
+  const transferColumns = database.prepare('PRAGMA table_info(transfer_jobs)').all() as { name: string }[];
+  if (!transferColumns.some((c) => c.name === 'dismissed_at')) {
+    database.exec('ALTER TABLE transfer_jobs ADD COLUMN dismissed_at INTEGER');
+  }
   database
     .prepare(
       "UPDATE transfer_jobs SET stage='error',error='Tác vụ bị gián đoạn',updated_at=? WHERE stage NOT IN ('done','error')",
@@ -142,4 +146,11 @@ export function eventForNode(nodeId: string): ClubEvent | undefined {
     )
     .get(nodeId) as ClubEvent | undefined;
   return row;
+}
+
+export function usedBytes(owner: string): number {
+  const row = db().prepare(
+    "SELECT COALESCE(SUM(size), 0) AS used FROM nodes WHERE owner=? AND kind='file' AND deleted_at IS NULL",
+  ).get(owner) as { used: number };
+  return row.used;
 }

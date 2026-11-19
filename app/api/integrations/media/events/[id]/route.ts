@@ -11,7 +11,7 @@ export async function GET(req: Request, { params }: Ctx) {
     const event = publicEvent((await params).id);
     const recap = db()
       .prepare(
-        "SELECT id,name,mime,size,created_at FROM nodes WHERE parent_id=? AND kind='file' AND deleted_at IS NULL ORDER BY created_at DESC",
+        "SELECT id,name,mime,size,created_at FROM nodes WHERE parent_id=? AND kind='file' AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM parts p WHERE p.node_id=nodes.id) ORDER BY created_at DESC",
       )
       .all(event.recap_folder_id);
     const toMedia = (row: {
@@ -23,11 +23,13 @@ export async function GET(req: Request, { params }: Ctx) {
     }) => ({
       ...row,
       content_path: `/api/integrations/media/files/${row.id}`,
+      web_path: `/api/integrations/media/files/${row.id}?size=web`,
+      thumbnail_path: `/api/integrations/media/files/${row.id}?size=thumb`,
     });
     const poster = event.poster_node_id
       ? (db()
           .prepare(
-            'SELECT id,name,mime,size,created_at FROM nodes WHERE id=? AND deleted_at IS NULL',
+            'SELECT id,name,mime,size,created_at FROM nodes WHERE id=? AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM parts p WHERE p.node_id=nodes.id)',
           )
           .get(event.poster_node_id) as Parameters<typeof toMedia>[0] | undefined)
       : undefined;

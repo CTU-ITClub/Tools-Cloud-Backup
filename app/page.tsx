@@ -30,6 +30,8 @@ import {
   Users,
   ClipboardCopy,
   ExternalLink,
+  ImagePlus,
+  Replace,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import { api, post, patch, del } from '@/lib/client';
@@ -65,6 +67,8 @@ type Member = {
   role: string;
   can_manage_events: number;
   disabled: number;
+  quota_bytes: number;
+  used_bytes?: number;
 };
 type Node = {
   id: string;
@@ -87,10 +91,14 @@ type ClubEvent = {
 };
 type Detail = ClubEvent & { poster: Node | null; recap: Node[] };
 const imageSrc = (id: string) => `/api/drive/${encodeURIComponent(id)}/file`;
+const eventImageSrc = (eventId: string, id: string, size: 'thumb' | 'web') =>
+  `/api/events/${encodeURIComponent(eventId)}/media/${encodeURIComponent(id)}/variant?size=${size}`;
 const date = (s: number) => new Date(s * 1000).toLocaleDateString('vi-VN');
 const bytes = (s: number) =>
-  s > 1024 * 1024
-    ? (s / 1048576).toFixed(1) + ' MB'
+  s >= 1073741824
+    ? (s / 1073741824).toFixed(2) + ' GB'
+    : s > 1024 * 1024
+      ? (s / 1048576).toFixed(1) + ' MB'
     : s > 1024
       ? (s / 1024).toFixed(1) + ' KB'
       : s + ' B';
@@ -209,12 +217,12 @@ function SignIn({ onReady }: { onReady: (member: Member) => void }) {
           </label>
           {setup && (
             <label>
-              Mã thiết lập (SETUP_TOKEN)
+              Mã thiết lập
               <input
                 required
                 value={setupToken}
                 onChange={(e) => setSetupToken(e.target.value)}
-                placeholder="Mã trong .env"
+                placeholder="Nhập mã thiết lập"
               />
             </label>
           )}
@@ -257,6 +265,9 @@ function Drive({ execute }: { execute: (fn: () => Promise<unknown>) => void }) {
   }, [parent]);
   useEffect(() => {
     void refresh().catch(() => {});
+    const onComplete = () => { void refresh().catch(() => {}); };
+    window.addEventListener('itclub:upload-complete', onComplete);
+    return () => window.removeEventListener('itclub:upload-complete', onComplete);
   }, [refresh]);
   const create = () => {
     const name = prompt('Tên thư mục mới');
@@ -524,6 +535,9 @@ function EventEditor({
   );
   useEffect(() => {
     void refresh().catch(() => {});
+    const onComplete = () => { void refresh().catch(() => {}); };
+    window.addEventListener('itclub:upload-complete', onComplete);
+    return () => window.removeEventListener('itclub:upload-complete', onComplete);
   }, [refresh]);
   const upload = (kind: 'poster' | 'recap', files: File[] | null) => {
     if (!files?.length) return;
@@ -605,7 +619,7 @@ function EventEditor({
           )}
         </div>
       </div>
-      <div className="editor-layout">
+      <div className={canEdit ? 'editor-layout' : 'editor-layout read-only-event'}>
         <div
           className={
             posterDrop.dragging
@@ -626,7 +640,7 @@ function EventEditor({
                 onClick={() => setPreview(detail.poster)}
                 title="Xem poster gốc"
               >
-                <img src={imageSrc(detail.poster.id)} alt={`Poster ${detail.title}`} />
+                <img src={eventImageSrc(detail.id, detail.poster.id, 'web')} alt={`Poster ${detail.title}`} />
               </button>
             ) : (
               <div className="poster-placeholder">
@@ -635,15 +649,11 @@ function EventEditor({
               </div>
             )}
           </div>
-          {canEdit && detail.poster && (
-            <button className="text-danger" onClick={() => removeMedia(detail.poster!.id)}>
-              Xóa poster hiện tại
-            </button>
-          )}
           {canEdit && (
-            <label className="btn btn-soft upload-label">
-              {' '}
-              {busy ? 'Đang upload...' : detail.poster ? 'Thay poster' : 'Tải poster lên'}
+            <div className="media-action-row">
+              <label className="btn btn-soft upload-label media-upload-action">
+                {detail.poster ? <Replace size={16} /> : <ImagePlus size={16} />}
+                {busy ? 'Đang tải lên...' : detail.poster ? 'Thay poster' : 'Thêm poster'}
               <input
                 type="file"
                 accept="image/jpeg,image/png,image/webp,image/avif,image/gif"
@@ -654,10 +664,16 @@ function EventEditor({
                 }}
                 hidden
               />
-            </label>
+              </label>
+              {detail.poster && (
+                <button className="media-remove-action" onClick={() => removeMedia(detail.poster!.id)} disabled={busy} title="Xóa poster">
+                  <Trash2 size={16} />
+                </button>
+              )}
+            </div>
           )}
         </div>
-        <div
+        {canEdit && <div
           className={
             recapDrop.dragging
               ? 'panel recap-panel media-drop-target dragging'
@@ -672,8 +688,8 @@ function EventEditor({
               <p>{detail.recap.length} ảnh sau sự kiện</p>
             </div>
             {canEdit && (
-              <label className="btn btn-primary upload-label">
-                {busy ? 'Đang tải...' : 'Thêm ảnh'}
+              <label className="btn btn-primary upload-label media-add-recap">
+                <ImagePlus size={17} /> {busy ? 'Đang tải...' : 'Thêm ảnh recap'}
                 <input
                   type="file"
                   multiple
@@ -699,7 +715,12 @@ function EventEditor({
               {detail.recap.map((img) => (
                 <div className="recap-photo" key={img.id}>
                   <button className="recap-preview-button" onClick={() => setPreview(img)}>
-                    <img src={imageSrc(img.id)} alt={img.name} />
+                    <img
+                      src={eventImageSrc(detail.id, img.id, 'thumb')}
+                      alt={img.name}
+                      loading="lazy"
+                      decoding="async"
+                    />
                     <span>{img.name}</span>
                   </button>
                   {canEdit && (
@@ -715,7 +736,7 @@ function EventEditor({
               ))}
             </div>
           )}
-        </div>
+        </div>}
       </div>
       {preview && (
         <FilePreview
@@ -806,13 +827,13 @@ function Events({
             <span>Đã xuất bản</span>
           </div>
         </div>
-        <div className="stat">
+        {canEdit && <div className="stat">
           <Images />
           <div>
             <b>{list.reduce((a, e) => a + e.recap_count, 0)}</b>
             <span>Ảnh recap</span>
           </div>
-        </div>
+        </div>}
       </div>
       {loading ? (
         <div className="event-loading-grid">
@@ -836,7 +857,12 @@ function Events({
             <button key={e.id} className="event-card" onClick={() => setSelected(e.id)}>
               <div className="event-cover">
                 {e.poster_node_id ? (
-                  <img src={imageSrc(e.poster_node_id)} alt={`Poster ${e.title}`} />
+                  <img
+                    src={eventImageSrc(e.id, e.poster_node_id, 'thumb')}
+                    alt={`Poster ${e.title}`}
+                    loading="lazy"
+                    decoding="async"
+                  />
                 ) : (
                   <div>
                     <Images size={44} />
@@ -854,9 +880,9 @@ function Events({
                 <h3>{e.title}</h3>
                 <p>{e.description || 'Bộ sưu tập ảnh hoạt động của IT Club.'}</p>
                 <div className="event-footer">
-                  <span>
+                  {canEdit && <span>
                     <Images size={16} /> {e.recap_count} ảnh recap
-                  </span>
+                  </span>}
                   <span>Chi tiết →</span>
                 </div>
               </div>
@@ -908,6 +934,35 @@ function Events({
     </>
   );
 }
+function QuotaEditor({ user, onSave }: { user: Member; onSave: (amount: number) => void }) {
+  const [limit, setLimit] = useState(String(Math.round(user.quota_bytes / 1048576)));
+  useEffect(() => setLimit(String(Math.round(user.quota_bytes / 1048576))), [user.quota_bytes]);
+  const parsed = Number(limit);
+  const valid = limit.trim() !== '' && Number.isInteger(parsed) && parsed >= 0 && parsed <= 10485760;
+  return (
+    <div className="quota-editor">
+      <label>
+        <span className="sr-only">Giới hạn MB cho {user.username}</span>
+        <input type="number" min="0" max="10485760" step="1" value={limit}
+          onChange={(event) => setLimit(event.target.value)} disabled={user.role === 'admin'} />
+        <small>MB</small>
+      </label>
+      <button className="btn btn-soft" disabled={user.role === 'admin' || !valid || parsed * 1048576 === user.quota_bytes}
+        onClick={() => onSave(parsed * 1048576)}>
+        Lưu
+      </button>
+    </div>
+  );
+}
+function QuotaUsage({ used, limit }: { used: number; limit: number }) {
+  const proportion = limit ? Math.min(100, Math.round(used / limit * 100)) : 0;
+  return (
+    <div className="quota-usage">
+      <div className="quota-label"><span>{bytes(used)} đã dùng</span><strong>{limit ? bytes(limit) : 'Không giới hạn'}</strong></div>
+      {limit > 0 && <div className="quota-meter" role="progressbar" aria-label="Dung lượng đã dùng" aria-valuemin={0} aria-valuemax={100} aria-valuenow={proportion}><i style={{ width: `${proportion}%` }} /></div>}
+    </div>
+  );
+}
 function Settings({
   member,
   execute,
@@ -919,9 +974,12 @@ function Settings({
     ready: boolean;
     state: { '@type': string; link?: string };
     error?: string;
+    account?: { id: number; name: string; username: string } | null;
   } | null>(null);
   const [qr, setQr] = useState('');
   const [members, setMembers] = useState<Member[]>([]);
+  const [myQuota, setMyQuota] = useState<{ quota_bytes: number; used_bytes: number } | null>(null);
+  const [createQuota, setCreateQuota] = useState('0');
   const [tokens, setTokens] = useState<
     { id: string; name: string; scope: string; revoked_at: number | null }[]
   >([]);
@@ -945,6 +1003,9 @@ function Settings({
     setTokens(keys);
   }, [admin]);
   useEffect(() => {
+    void api<{ quota_bytes: number; used_bytes: number }>('/api/me/quota').then(setMyQuota).catch(() => {});
+  }, []);
+  useEffect(() => {
     void refresh().catch(() => {});
     if (!admin) return;
     const t = setInterval(() => {
@@ -955,13 +1016,13 @@ function Settings({
     return () => clearInterval(t);
   }, [refresh, admin]);
   useEffect(() => {
-    const link = tg?.state?.link;
+    const link = tg?.ready ? undefined : tg?.state?.link;
     if (link) {
       QRCode.toDataURL(link, { width: 230, margin: 2 })
         .then(setQr)
         .catch(() => setQr(''));
     } else setQr('');
-  }, [tg?.state?.link]);
+  }, [tg?.state?.link, tg?.ready]);
   const authState = tg?.state?.['@type'] || 'Đang tải...';
   return (
     <>
@@ -1015,6 +1076,12 @@ function Settings({
             </label>
             <Button type="submit">Đổi mật khẩu</Button>
           </form>
+          {myQuota && (
+            <div className="account-quota">
+              <h3>Dung lượng lưu trữ</h3>
+              <QuotaUsage used={myQuota.used_bytes} limit={myQuota.quota_bytes} />
+            </div>
+          )}
         </section>
         {admin && (
           <section className="panel">
@@ -1026,28 +1093,32 @@ function Settings({
                 {tg?.ready ? 'Đã kết nối' : 'Chưa kết nối'}
               </span>
             </div>
-            <p>
-              Trạng thái: <code>{authState}</code>
-            </p>
-            {tg?.error && <div className="alert">{tg.error}</div>}
-            {qr && (
-              <div className="qr">
-                <img src={qr} width="230" height="230" alt="Telegram QR Login" />
-                <p>Telegram → Cài đặt → Thiết bị → Liên kết thiết bị</p>
+            {tg?.ready ? (
+              <div className="telegram-profile">
+                <span className="telegram-avatar">{(tg.account?.name || 'T').slice(0, 1).toUpperCase()}</span>
+                <div>
+                  <strong>{tg.account?.name || 'Đã kết nối Telegram'}</strong>
+                  {tg.account?.username && <small>@{tg.account.username}</small>}
+                  {tg.account?.id && <small>ID: {tg.account.id}</small>}
+                </div>
+                <Check size={20} className="success-icon" />
               </div>
-            )}
-            <Button
-              soft
-              onClick={() =>
-                execute(async () => {
+            ) : (
+              <>
+                {tg?.error && <div className="alert">{tg.error}</div>}
+                {qr ? (
+                  <div className="qr">
+                    <img src={qr} width="230" height="230" alt="Mã QR Telegram" />
+                    <p>Quét mã bằng ứng dụng Telegram để đăng nhập.</p>
+                  </div>
+                ) : <p className="muted">{authState === 'authorizationStateWaitPassword' ? 'Cần xác nhận bảo mật.' : 'Kết nối Telegram để lưu tệp.'}</p>}
+                <Button soft onClick={() => execute(async () => {
                   await post('/api/telegram/auth', { action: 'qr' });
                   await refresh();
-                })
-              }
-            >
-              Tạo QR đăng nhập
-            </Button>
-            {authState === 'authorizationStateWaitPassword' && (
+                })}>{qr ? 'Tạo mã mới' : 'Kết nối Telegram'}</Button>
+              </>
+            )}
+            {!tg?.ready && authState === 'authorizationStateWaitPassword' && (
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -1067,9 +1138,6 @@ function Settings({
                 <Button type="submit">Xác nhận</Button>
               </form>
             )}
-            <p className="muted small">
-              Thiết lập TELEGRAM_API_ID và TELEGRAM_API_HASH trong .env rồi khởi động lại ứng dụng.
-            </p>
           </section>
         )}
         {admin && <AdminStorageSettings />}
@@ -1090,9 +1158,11 @@ function Settings({
                     username,
                     password,
                     can_manage_events: allowEvents,
+                    quota_bytes: Number(createQuota) * 1048576,
                   });
                   setUsername('');
                   setPassword('');
+                  setCreateQuota('0');
                   await refresh();
                 });
               }}
@@ -1112,6 +1182,11 @@ function Settings({
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
               />
+              <label className="quota-new-label">
+                <span>Giới hạn (MB)</span>
+                <input type="number" min="0" max="10485760" step="1" value={createQuota}
+                  onChange={(e) => setCreateQuota(e.target.value)} required />
+              </label>
               <label className="check">
                 <input
                   type="checkbox"
@@ -1130,7 +1205,12 @@ function Settings({
                   <span>
                     <strong>{u.username}</strong>
                     <small>{u.role === 'admin' ? 'Quản trị viên' : 'Thành viên'}</small>
+                    <QuotaUsage used={u.used_bytes || 0} limit={u.quota_bytes || 0} />
                   </span>
+                  <QuotaEditor user={u} onSave={(amount) => execute(async () => {
+                    await patch('/api/admin/users', { id: u.id, quota_bytes: amount });
+                    await refresh();
+                  })} />
                   <label className="check">
                     <input
                       type="checkbox"
@@ -1180,10 +1260,7 @@ function Settings({
               </h2>
               <span>Quyền events:read</span>
             </div>
-            <p>
-              Tạo token chỉ đọc ảnh của sự kiện đã xuất bản. Secret chỉ hiển thị một lần; service
-              khác gửi token qua <code>Authorization: Bearer</code>.
-            </p>
+            <p>Quản lý quyền đọc ảnh của các dịch vụ kết nối.</p>
             <form
               className="inline-form"
               onSubmit={(e) => {

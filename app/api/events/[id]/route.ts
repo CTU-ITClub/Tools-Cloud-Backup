@@ -1,5 +1,7 @@
 import { requireUser, requireEventManager } from '@/lib/auth';
 import { db, getEvent, now, sqlNode, validName } from '@/lib/db';
+import { canViewNode } from '@/lib/files';
+import { deleteImageVariants } from '@/lib/media-variants';
 import { handle } from '@/lib/route';
 import { ok, secureMutation } from '@/lib/http';
 export const runtime = 'nodejs';
@@ -7,16 +9,24 @@ export const dynamic = 'force-dynamic';
 type Ctx = { params: Promise<{ id: string }> };
 export async function GET(_req: Request, { params }: Ctx) {
   return handle(async () => {
-    await requireUser();
+    const user = await requireUser();
     const event = getEvent((await params).id);
-    if (!event) throw new Error('Sự kiện không tồn tại');
-    const poster = event.poster_node_id ? sqlNode(event.poster_node_id) : null;
+    if (!event || (!event.published && user.role !== 'admin' && !user.can_manage_events))
+      throw new Error('Sự kiện không tồn tại');
+    const posterNode = event.poster_node_id ? sqlNode(event.poster_node_id) : null;
+    const poster =
+      posterNode &&
+      canViewNode(posterNode, user) &&
+      db().prepare('SELECT 1 FROM parts WHERE node_id=? LIMIT 1').get(posterNode.id)
+        ? posterNode
+        : null;
     const recap = db()
       .prepare(
-        "SELECT id,name,size,mime,created_at FROM nodes WHERE parent_id=? AND kind='file' AND deleted_at IS NULL ORDER BY created_at DESC",
+        "SELECT n.id,n.name,n.size,n.mime,n.created_at FROM nodes n WHERE n.parent_id=? AND n.kind='file' AND n.deleted_at IS NULL AND EXISTS (SELECT 1 FROM parts p WHERE p.node_id=n.id) ORDER BY n.created_at DESC",
       )
       .all(event.recap_folder_id);
-    return ok({ ...event, poster, recap });
+    const canSeeRecap = user.role === 'admin' || user.can_manage_events === 1;
+    return ok({ ...event, poster, recap: canSeeRecap ? recap : [] });
   });
 }
 export async function PATCH(req: Request, { params }: Ctx) {
@@ -44,6 +54,14 @@ export async function DELETE(req: Request, { params }: Ctx) {
     requireEventManager(await requireUser());
     const event = getEvent((await params).id);
     if (!event) throw new Error('Sự kiện không tồn tại');
+    const variantIds = [
+      ...(event.poster_node_id ? [event.poster_node_id] : []),
+      ...(
+        db().prepare('SELECT id FROM nodes WHERE parent_id=?').all(event.recap_folder_id) as {
+          id: string;
+        }[]
+      ).map((item) => item.id),
+    ];
     const t = now();
     db().transaction(() => {
       db().prepare('DELETE FROM events WHERE id=?').run(event.id);
@@ -54,6 +72,7 @@ export async function DELETE(req: Request, { params }: Ctx) {
         )
         .run(event.folder_id, t, t);
     })();
+    await Promise.allSettled(variantIds.map((nodeId) => deleteImageVariants(nodeId)));
     return ok({ ok: true });
   });
 }

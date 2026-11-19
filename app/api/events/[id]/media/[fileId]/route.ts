@@ -2,6 +2,7 @@ import { requireUser, requireEventManager } from '@/lib/auth';
 import { db, getEvent, now, sqlNode } from '@/lib/db';
 import { handle } from '@/lib/route';
 import { ok, secureMutation } from '@/lib/http';
+import { deleteImageVariants } from '@/lib/media-variants';
 export const runtime = 'nodejs';
 type Ctx = { params: Promise<{ id: string; fileId: string }> };
 export async function DELETE(req: Request, { params }: Ctx) {
@@ -25,6 +26,7 @@ export async function DELETE(req: Request, { params }: Ctx) {
         .prepare('UPDATE nodes SET deleted_at=?,updated_at=? WHERE id=?')
         .run(now(), now(), file.id);
     })();
+    await deleteImageVariants(file.id).catch(() => {});
     return ok({ ok: true });
   });
 }

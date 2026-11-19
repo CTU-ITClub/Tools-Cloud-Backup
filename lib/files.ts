@@ -31,6 +31,7 @@ export async function storeFile(
   mime: string,
   replaceId?: string,
   uploaderId?: string,
+  optimizeImage = false,
 ): Promise<Node> {
   const name = validName(filename);
   if (parentId) {
@@ -111,6 +112,12 @@ export async function storeFile(
     }
     try {
       const value = db().transaction(() => {
+        const current = db().prepare('SELECT quota_bytes FROM users WHERE id=?').get(owner) as { quota_bytes: number };
+        const nowUsed = db().prepare(
+          "SELECT COALESCE(SUM(size),0) AS total FROM nodes WHERE owner=? AND kind='file' AND deleted_at IS NULL",
+        ).get(owner) as { total: number };
+        if (current.quota_bytes > 0 && nowUsed.total + written - (existing?.size || 0) > current.quota_bytes)
+          throw new Error('Đã hết dung lượng lưu trữ');
         const key = replaceId || id();
         const t = now();
         const finalName = replaceId ? name : availableFilename(owner, parentId, name);
@@ -138,6 +145,15 @@ export async function storeFile(
         });
         return sqlNode(key)!;
       })();
+      if (optimizeImage && isImage(mime)) {
+        try {
+          const { generateImageVariants, deleteImageVariants } = await import('./media-variants');
+          if (replaceId) await deleteImageVariants(value.id);
+          await generateImageVariants(temp, value.id);
+        } catch (error) {
+          console.error('Không tạo được ảnh thu nhỏ:', error);
+        }
+      }
       updateTransfer(transferId, 'done', written);
       return value;
     } catch (e) {
@@ -207,11 +223,15 @@ export async function downloadNode(node: Node, download = false): Promise<Respon
 }
 export function canViewNode(node: Node, user: User) {
   const event = eventForNode(node.id);
-  return (
-    user.role === 'admin' ||
-    node.owner === user.id ||
-    (!!event && (event.published === 1 || user.can_manage_events === 1))
-  );
+  if (user.role === 'admin') return true;
+  if (event) {
+    if (user.can_manage_events === 1) return true;
+    // Recap photos are managed by the event team. Only the media service
+    // (with its own read token) can distribute published recap photos publicly.
+    if (node.parent_id === event.recap_folder_id) return false;
+    return event.published === 1 || event.owner === user.id;
+  }
+  return node.owner === user.id;
 }
 export function requireOwnFolder(id: string | null, user: User) {
   if (!id) return;

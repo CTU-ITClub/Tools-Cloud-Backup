@@ -9,8 +9,12 @@ export async function GET(req: Request) {
     requireMediaService(req);
     const events = db()
       .prepare(
-        `SELECT id,slug,title,description,updated_at,
- poster_node_id AS poster_id, (SELECT COUNT(*) FROM nodes n WHERE n.parent_id=e.recap_folder_id AND n.kind='file' AND n.deleted_at IS NULL) AS recap_count
+        `SELECT e.id,e.slug,e.title,e.description,e.updated_at,
+ CASE WHEN EXISTS (
+   SELECT 1 FROM nodes poster
+   WHERE poster.id=e.poster_node_id AND poster.deleted_at IS NULL
+   AND EXISTS (SELECT 1 FROM parts p WHERE p.node_id=poster.id)
+ ) THEN e.poster_node_id ELSE NULL END AS poster_id, (SELECT COUNT(*) FROM nodes n WHERE n.parent_id=e.recap_folder_id AND n.kind='file' AND n.deleted_at IS NULL AND EXISTS (SELECT 1 FROM parts p WHERE p.node_id=n.id)) AS recap_count
  FROM events e WHERE published=1 ORDER BY updated_at DESC`,
       )
       .all();

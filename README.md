@@ -52,9 +52,9 @@ Workshop GitHub/
     └── 03.webp
 ```
 
-Quản trị viên hoặc thành viên có quyền **Quản lý sự kiện** được tạo sự kiện, cập nhật poster và upload nhiều ảnh recap. Thả poster vào vùng **Poster**, thả ảnh vào vùng **Recap**. Ảnh poster được truyền nguyên file và hiển thị `object-fit: contain`, không cắt, không chuyển định dạng.
+Quản trị viên hoặc thành viên có quyền **Quản lý sự kiện** được tạo sự kiện, cập nhật poster và upload nhiều ảnh recap. Thả poster vào vùng **Poster**, thả ảnh vào vùng **Recap**. Ảnh poster được lưu nguyên gốc và hiển thị `object-fit: contain`, không cắt. Ảnh sự kiện có thêm bản WebP 480px (thumbnail) và 1600px (web), tạo trên máy chủ bằng `sharp`. Bản gốc vẫn giữ trên Telegram; các bản tối ưu là cache ở `data/media-variants/` và có thể tạo lại từ bản gốc.
 
-API `events:read` chỉ được đọc ảnh thuộc sự kiện đã xuất bản.
+API `events:read` chỉ được đọc ảnh thuộc sự kiện đã xuất bản. Service có thể gọi `?size=thumb` hoặc `?size=web` để lấy ảnh tối ưu, hoặc bỏ query để tải bản gốc. Thành viên không có quyền quản lý sự kiện không được xem recap trực tiếp trong ứng dụng.
 
 ### Tiến trình upload/download
 
@@ -184,3 +184,10 @@ npm run build
 ## Giấy phép
 
 Xem [LICENSE](LICENSE).
+
+### Cập nhật phiên bản quản lý dữ liệu
+
+- Tác vụ đã hoàn tất hoặc lỗi có thể xóa khỏi danh sách và cơ sở dữ liệu. Nếu tác vụ phía máy chủ vẫn xử lý, thao tác X ẩn nó và tự dọn sau khi kết thúc. Nút thử lại chỉ khả dụng khi trình duyệt còn giữ file nguồn; sau khi tải lại trang cần chọn file để upload mới.
+- Người dùng thấy dung lượng đã dùng và hạn mức của mình trong Cài đặt; quản trị viên đặt giới hạn từng thành viên, nhập 0 để không giới hạn. Hạn mức tính theo kích thước file gốc đang hoạt động, không cộng cache ảnh WebP.
+- Mã QR Telegram chỉ hiện khi chưa kết nối; khi đã đăng nhập sẽ hiển thị tên, username và ID.
+- Chạy `npm install` sau khi áp dụng patch để cài `sharp`. Khi dùng Docker, `docker compose up -d --build` sẽ cập nhật image.

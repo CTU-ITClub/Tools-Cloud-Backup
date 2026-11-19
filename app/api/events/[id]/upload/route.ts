@@ -36,6 +36,7 @@ export async function POST(req: Request, { params }: Ctx) {
       mime,
       type === 'poster' ? event.poster_node_id || undefined : undefined,
       uploader.id,
+      true,
     );
     if (type === 'poster') {
       db()

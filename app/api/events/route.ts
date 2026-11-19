@@ -6,14 +6,23 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export async function GET() {
   return handle(async () => {
-    await requireUser();
+    const user = await requireUser();
     const rows = db()
       .prepare(
-        `SELECT e.*, (SELECT COUNT(*) FROM nodes n WHERE n.parent_id=e.recap_folder_id AND n.kind='file' AND n.deleted_at IS NULL) AS recap_count
- FROM events e ORDER BY e.created_at DESC`,
+        `SELECT e.id,e.slug,e.title,e.description,e.owner,e.folder_id,e.recap_folder_id,e.published,e.created_at,e.updated_at,
+  CASE WHEN EXISTS (SELECT 1 FROM nodes n WHERE n.id=e.poster_node_id AND n.deleted_at IS NULL AND EXISTS (SELECT 1 FROM parts p WHERE p.node_id=n.id))
+  THEN e.poster_node_id ELSE NULL END AS poster_node_id,
+  (SELECT COUNT(*) FROM nodes n WHERE n.parent_id=e.recap_folder_id AND n.kind='file' AND n.deleted_at IS NULL AND EXISTS (SELECT 1 FROM parts p WHERE p.node_id=n.id)) AS recap_count
+ FROM events e WHERE (?=1 OR e.published=1) ORDER BY e.created_at DESC`,
       )
-      .all();
-    return ok(rows);
+      .all(user.role === 'admin' || user.can_manage_events === 1 ? 1 : 0);
+    const allowed = user.role === 'admin' || user.can_manage_events === 1;
+    return ok(
+      (rows as (Record<string, unknown> & { recap_count: number })[]).map((event) => ({
+        ...event,
+        recap_count: allowed ? event.recap_count : 0,
+      })),
+    );
   });
 }
 export async function POST(req: Request) {

@@ -144,10 +144,7 @@ export function AdminStorageSettings() {
           </h2>
           <span className="status">{bots.bots.length} bot đã lưu</span>
         </div>
-        <p>
-          Thêm bot vào nhóm Telegram, sau đó nhập token và Chat ID. Những bot đang giữ file không
-          thể bị xóa hoặc đổi token.
-        </p>
+        <p>Quản lý các bot và kiểm tra kết nối lưu trữ.</p>
         <div className="bot-editor-list">
           {bots.bots.map((bot, index) => (
             <div key={index} className="bot-editor-row">
@@ -259,10 +256,7 @@ export function AdminStorageSettings() {
             {backup?.connected ? 'Đã liên kết' : 'Chưa liên kết'}
           </span>
         </div>
-        <p>
-          Nhập thông tin OAuth của Google Cloud, lưu, sau đó nhấn “Kết nối Google”. Sao lưu bao gồm
-          database và các file gốc, mã hóa trước khi tải lên.
-        </p>
+        <p>Sao lưu dữ liệu và tài khoản an toàn trên Google Drive.</p>
         {!backup ? (
           <div className="preview-loader">
             <Spinner /> Đang đọc cài đặt...
@@ -293,7 +287,7 @@ export function AdminStorageSettings() {
                 />
               </label>
               <label>
-                Chu kỳ backup (giờ)
+                Chu kỳ sao lưu (giờ)
                 <input
                   type="number"
                   step="0.25"
@@ -321,7 +315,7 @@ export function AdminStorageSettings() {
                 />
               </label>
               <label>
-                Folder ID (không bắt buộc)
+                Mã thư mục (không bắt buộc)
                 <input
                   value={backup.folderId}
                   onChange={(e) => setBackup({ ...backup, folderId: e.target.value })}
@@ -336,14 +330,6 @@ export function AdminStorageSettings() {
               />{' '}
               Bao gồm file gốc trong bản sao lưu
             </label>
-            <p className="muted small">
-              Redirect URI cần khai báo trên Google Cloud:{' '}
-              <code>
-                {typeof window === 'undefined'
-                  ? ''
-                  : `${window.location.origin}/api/admin/google/callback`}
-              </code>
-            </p>
             <div className="actions storage-buttons">
               <button className="btn btn-primary" disabled={!!busy} onClick={saveBackup}>
                 {busy === 'drive' ? <Spinner /> : <Save size={16} />} Lưu cài đặt

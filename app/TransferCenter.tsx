@@ -7,6 +7,7 @@ import {
   CloudDownload,
   CloudUpload,
   X,
+  RotateCcw,
   AlertTriangle,
 } from 'lucide-react';
 import { api, uploadFile } from '@/lib/client';
@@ -61,11 +62,18 @@ export function TransferCenter({
   const [local, setLocal] = useState<Record<string, Task>>({});
   const [remote, setRemote] = useState<Job[]>([]);
   const [hidden, setHidden] = useState<string[]>([]);
+  const sources = useRef(
+    new Map<
+      string,
+      { path?: string; file?: File; headers?: Record<string, string>; downloadId?: string; name?: string }
+    >(),
+  );
   const [collapsed, setCollapsed] = useState(false);
-  const recent = useRef<Record<string, { time: number; bytes: number }>>({});
   const edit = useCallback(
     (id: string, patch: Partial<Task>) =>
-      setLocal((prev) => ({ ...prev, [id]: { ...prev[id], ...patch } })),
+      setLocal((prev) =>
+        prev[id] ? { ...prev, [id]: { ...prev[id], ...patch } } : prev,
+      ),
     [],
   );
   useEffect(() => {
@@ -94,6 +102,7 @@ export function TransferCenter({
           const file = files[index++];
           const id = crypto.randomUUID();
           const time = performance.now();
+          sources.current.set(id, { path, file, headers });
           setLocal((prev) => ({
             ...prev,
             [id]: {
@@ -119,6 +128,8 @@ export function TransferCenter({
               },
             });
             edit(id, { local: file.size, remote: file.size, stage: 'done' });
+            sources.current.delete(id);
+            window.dispatchEvent(new Event('itclub:upload-complete'));
           } catch (e) {
             edit(id, { stage: 'error', error: e instanceof Error ? e.message : 'Upload thất bại' });
             error = e instanceof Error ? e : new Error(String(e));
@@ -149,6 +160,7 @@ export function TransferCenter({
         if (e instanceof Error && e.name === 'AbortError') return;
         throw e;
       }
+      sources.current.set(key, { downloadId: id, name });
       setLocal((prev) => ({
         ...prev,
         [key]: {
@@ -200,6 +212,7 @@ export function TransferCenter({
           setTimeout(() => URL.revokeObjectURL(url), 5000);
         }
         edit(key, { stage: 'done', local: done, remote: done });
+        sources.current.delete(key);
       } catch (e) {
         await writer?.abort().catch(() => {});
         edit(key, { stage: 'error', error: e instanceof Error ? e.message : 'Download thất bại' });
@@ -208,13 +221,45 @@ export function TransferCenter({
     },
     [edit],
   );
+  const dismiss = useCallback(async (id: string) => {
+    setHidden((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    setLocal((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+    setRemote((prev) => prev.filter((job) => job.id !== id));
+    sources.current.delete(id);
+    try {
+      await api('/api/transfers', { method: 'DELETE', body: JSON.stringify({ id }) });
+    } catch (error) {
+      console.error('Không xóa được tác vụ:', error);
+    }
+  }, []);
+  const retry = useCallback(
+    async (taskId: string) => {
+      const source = sources.current.get(taskId);
+      if (!source) return;
+      await dismiss(taskId);
+      try {
+        if (source.file && source.path) {
+          await upload(source.path, [source.file], source.headers || {});
+        } else if (source.downloadId && source.name) {
+          await download(source.downloadId, source.name);
+        }
+      } catch {
+        // Retry results are displayed as a new task.
+      }
+    },
+    [dismiss, upload, download],
+  );
   const tasks = Object.values(local).map((task) => {
     const matching = remote.find((j) => j.id === task.id);
     if (!matching) return task;
     const data = {
       ...task,
       remote: matching.bytes_remote,
-      stage: matching.stage,
+      stage: matching.stage === 'done' ? 'done' : task.stage === 'error' ? 'error' : matching.stage,
       error: matching.error || task.error,
       size: matching.bytes_total || task.size,
     };
@@ -239,6 +284,7 @@ export function TransferCenter({
     .slice(-12)
     .reverse();
   const active = visible.filter((t) => !['done', 'error'].includes(t.stage)).length;
+  const finished = visible.filter((t) => ['done', 'error'].includes(t.stage));
   return (
     <Transfers.Provider value={{ upload, download }}>
       {children}
@@ -253,18 +299,26 @@ export function TransferCenter({
             >
               {collapsed ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
             </button>
-            <button
-              aria-label="Đóng bảng"
-              onClick={() => setHidden((v) => [...v, ...visible.map((t) => t.id)])}
-            >
-              <X size={17} />
-            </button>
+            {finished.length > 0 && (
+              <button
+                title="Xóa tác vụ đã kết thúc"
+                aria-label="Xóa tác vụ đã kết thúc"
+                onClick={() => {
+                  void Promise.all(finished.map((task) => dismiss(task.id)));
+                }}
+              >
+                <X size={17} />
+              </button>
+            )}
           </div>
           {!collapsed && (
             <div className="transfer-items">
               {visible.map((t) => {
                 const ended = t.stage === 'done';
                 const failed = t.stage === 'error';
+                const serverJob = remote.find((job) => job.id === t.id);
+                const canRetry = failed && sources.current.has(t.id) &&
+                  (!serverJob || serverJob.stage === 'error');
                 const localProgress = ended ? 100 : percent(t.local, t.size);
                 const remoteProgress = ended ? 100 : percent(t.remote, t.size);
                 const stage =
@@ -299,9 +353,29 @@ export function TransferCenter({
                             ? 'Lỗi'
                             : `${t.direction === 'upload' && t.stage === 'telegram' ? remoteProgress : localProgress}%`}
                       </span>
-                      <button aria-label="Ẩn tác vụ" onClick={() => setHidden((v) => [...v, t.id])}>
-                        <X size={14} />
-                      </button>
+                      {canRetry && (
+                        <button
+                          className="transfer-retry"
+                          aria-label={`Thử lại ${t.name}`}
+                          title="Thử lại"
+                          onClick={() => {
+                            void retry(t.id);
+                          }}
+                        >
+                          <RotateCcw size={15} />
+                        </button>
+                      )}
+                      {(ended || failed) && (
+                        <button
+                          aria-label={`Xóa ${t.name}`}
+                          title="Xóa tác vụ"
+                          onClick={() => {
+                            void dismiss(t.id);
+                          }}
+                        >
+                          <X size={15} />
+                        </button>
+                      )}
                     </div>
                     <div className="transfer-stage">
                       {stage}
